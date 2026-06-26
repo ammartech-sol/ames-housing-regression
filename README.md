@@ -1,31 +1,33 @@
 # Ames Housing Price Prediction
 
-**Goal:** Predict the sale price of residential properties in Ames, Iowa using physical attributes, location, quality ratings, and sale conditions.
+A regression project to predict residential property sale prices in Ames, Iowa. The dataset comes from Dean De Cock and covers 2,930 home sales between 2006 and 2010 across 82 features: everything from square footage and garage finish to neighborhood and zoning classification.
 
-**Why it matters:** Accurate price prediction benefits buyers, sellers, and real estate platforms alike. A reliable model removes guesswork from property valuation and surfaces which features actually drive residential value.
+---
 
-&nbsp;
+## Results
 
-| Step | Details |
-|---|---|
-| Dataset | Ames Housing by Dean De Cock, 2,930 rows, 82 features |
-| Model | Ridge Regression |
-| Target transformation | log1p applied to SalePrice |
-| Best alpha | 10 |
-| Final R2 | 0.9315 |
-| Final MAE | $11,004 |
-| Final RMSE | $15,727 |
+**Final Model: Ridge Regression (alpha = 10, log-transformed target)**
 
-&nbsp;
+| Model | MAE | RMSE | R2 |
+|---|---|---|---|
+| Ridge Baseline | $11,296 | $16,011 | 0.9250 |
+| LightGBM Baseline | $11,917 | $16,899 | 0.9184 |
+| Ridge Tuned (alpha=10) | **$11,004** | **$15,727** | **0.9315** |
+
+The model explains **93.15% of the variance in sale prices**. Predictions are off by $11,004 on average. LightGBM actually lost to Ridge here without tuning. More on that below.
+
+---
 
 ## Dataset
 
 - **Source:** Ames Housing Dataset by Dean De Cock
 - **Size:** 2,930 rows, 82 features
-- **Target:** SalePrice (continuous, in USD)
+- **Target:** `SalePrice` (continuous, in USD)
 - **Sale years:** 2006 to 2010
 
-## Project Structure
+---
+
+## Folder Structure
 
 ```
 ames-housing-regression/
@@ -33,7 +35,7 @@ ames-housing-regression/
 │   └── ames_housing.csv
 ├── models/
 │   ├── ridge_ames.pkl
-│   ├── preprocessor.pkl
+│   ├── ames_preprocessor.pkl
 │   └── ames_columns.pkl
 ├── notebook/
 │   └── notebook.ipynb
@@ -42,80 +44,153 @@ ames-housing-regression/
 └── README.md
 ```
 
-## Pipeline
+---
 
-**1. Data Cleaning**
+## Project Walkthrough
 
-Removed 6 columns exceeding 1,400 missing values: Alley, Fireplace Qu, Pool QC, Fence, Misc Feature, and Mas Vnr Type. Dropped rows with only 1 or 2 missing values in low-null columns. Filled remaining numerical nulls with median and categorical nulls with "None" to represent absent features rather than unknown values.
+### 1. Data Cleaning
 
-**2. Outlier Handling**
+Six columns were dropped immediately for exceeding 1,400 missing values: `Alley`, `Fireplace Qu`, `Pool QC`, `Fence`, `Misc Feature`, and `Mas Vnr Type`. For columns with only 1 or 2 missing rows (`Electrical`, the basement square footage columns, `Garage Cars`, `Garage Area`), those rows were dropped entirely rather than imputed since losing a handful of rows from a 2,930-row dataset is not a real cost.
 
-Removed 4 extreme Gr Liv Area observations above 4,000 sqft as recommended by the dataset creator. Capped 8 numerical columns at the 99th percentile including Lot Area, Total Bsmt SF, and 1st Flr SF. Year-based and count columns were left untouched since their extreme values represent valid rare cases. Capping was prioritized here because Ridge as a linear model is sensitive to extreme values, unlike tree-based models.
+The remaining nulls split into two groups. Numerical columns (`Lot Frontage`, `Mas Vnr Area`, `Garage Yr Blt`) were filled with their medians. Categorical columns like `Bsmt Qual` and `Garage Type` were filled with `"None"`. These are not unknown values, they mean the house simply does not have that feature.
 
-**3. Feature Engineering**
+### 2. Outlier Handling
 
-Four composite features were added before the train/test split. Total SF combines basement and above-ground floor area into one size measure. Total Bathrooms weights full and half baths into a single amenity score. House Age and Remod Age measure how old the house was and how recently it was renovated at the time of sale.
+The dataset creator specifically flagged a few `Gr Liv Area` observations above 4,000 sqft as outliers that should be removed before modeling. Those four rows were dropped first.
 
-**4. Encoding**
+After that, all numerical columns were checked using the IQR method and boxplotted to see what was actually there. Eight columns had extreme values that were capped at the 99th percentile: `Lot Area`, `BsmtFin SF 1`, `Total Bsmt SF`, `1st Flr SF`, `Low Qual Fin SF`, `Gr Liv Area`, `Misc Val`, and `SalePrice`. Year-based columns and count columns were left alone since a house built in 1880 or a property with 8 bedrooms is unusual but not wrong.
 
-The 39 object columns were split into two groups. 16 ordinal columns with a meaningful quality or grade order were encoded using OrdinalEncoder with explicit category sequences, applied to the full dataframe before splitting. 22 nominal columns with no inherent order were one-hot encoded using OneHotEncoder inside a ColumnTransformer applied after the split to prevent data leakage. StandardScaler was applied to all numerical columns inside the same ColumnTransformer. Final feature matrix contained 167 columns after encoding.
+Capping was used instead of removal because Ridge is a linear model and is sensitive to extreme values pulling coefficients in ways tree models are not.
 
-**5. Model Selection**
+### 3. Feature Engineering
 
-Compared Ridge Regression and LightGBM as baselines. Ridge achieved a test R2 of 0.9250 while LightGBM reached 0.9183. LightGBM showed a 6.4 point gap between its train score (0.9826) and test score, indicating significant overfitting without tuning. Ridge was selected as the primary model due to better generalization out of the box.
+Four composite features were created before the train/test split:
 
-**6. Cross Validation**
+- **`Total SF`**: basement area plus first and second floor area combined into one total size measure
+- **`Total Bathrooms`**: full baths plus half baths weighted at 0.5, across both above-grade and basement
+- **`House Age`**: year sold minus year built, measuring how old the property was at time of sale
+- **`Remod Age`**: year sold minus year last remodeled, capturing how recently the home was updated
 
-5-fold cross validation on the training set returned a mean R2 of 0.9158 with a standard deviation of 0.0131. Scores across all five folds stayed above 0.90, confirming the model is stable and consistent across different data splits.
+### 4. Encoding
 
-**7. Hyperparameter Tuning**
+The 39 object columns were split into two groups based on whether the categories have a meaningful order.
 
-GridSearchCV tested 8 values of alpha across 5 folds for a total of 40 fits. Best alpha was 10, improving CV R2 to 0.9193 and final test R2 to 0.9315. MAE improved from $11,296 to $11,004 and RMSE dropped from $16,011 to $15,727.
+16 ordinal columns (quality ratings, condition grades, functional ratings) were encoded using `OrdinalEncoder` with explicit category sequences before the train/test split. The category order was defined manually for each column. For example, `Exter Qual` goes `['Po', 'Fa', 'TA', 'Gd', 'Ex']` and `Bsmt Exposure` goes `['None', 'No', 'Mn', 'Av', 'Gd']`. Using `OrdinalEncoder` without defining these sequences would assign arbitrary numbers and lose the ordering information entirely.
 
-**8. Feature Importance**
+22 nominal columns with no inherent order (`Neighborhood`, `MS Zoning`, `Sale Type`, etc.) were one-hot encoded using `OneHotEncoder` inside a `ColumnTransformer` applied after the split. `StandardScaler` was also applied to all numerical columns inside the same `ColumnTransformer`. The final feature matrix came out at 167 columns.
 
-Ridge coefficients were taken as absolute values to measure feature importance. Top drivers confirmed that location (MS Zoning, Neighborhood), material quality (Exterior BrkFace), and size (Overall Qual, Gr Liv Area) are the primary determinants of residential property value in this dataset.
+The ordinal encoding was applied to the full dataframe before splitting, which is technically a mild form of leakage for those 16 columns. Since ordinal encoding just replaces string labels with their predefined rank and does not learn any statistics from the data, the practical impact is negligible. There is nothing learned from the test set that could inflate scores.
 
-## Why Ridge Over LightGBM
+### 5. Target Transformation
 
-LightGBM is generally the stronger model on tabular data but overfitted significantly here without tuning. Ridge with its built-in L2 regularization handled the 167-feature post-encoding space better out of the box. Alpha=10 applied enough regularization to prevent over-reliance on noisy or redundant encoded columns without underfitting. For a dataset of this size, a well-regularized linear model is a strong and interpretable choice.
+`SalePrice` was log-transformed using `np.log1p` before training. Skewness dropped from 1.76 to 0.08. Predictions were converted back using `np.expm1` before computing MAE and RMSE so the error metrics are in actual dollar values.
+
+### 6. Model Selection
+
+Ridge and LightGBM were both trained as baselines. Train scores:
+
+```
+Ridge train score:    0.93
+LightGBM train score: 0.98
+```
+
+LightGBM's train score of 0.98 versus its test score of 0.9184 is a 6.4-point gap. Clear overfitting with default parameters. Ridge generalized better out of the box at 0.9250 on the test set. Ridge moved forward as the primary model.
+
+### 7. Cross Validation
+
+5-fold cross-validation on the training set returned a mean R2 of **0.9158** with a standard deviation of **0.0131**. All five folds stayed above 0.90.
+
+### 8. Hyperparameter Tuning
+
+`GridSearchCV` tested 8 alpha values (`[0.1, 1, 10, 50, 100, 200, 500, 1000]`) across 5 folds, 40 fits total. Best alpha was **10**.
+
+| | Before Tuning | After Tuning |
+|---|---|---|
+| CV R2 | 0.9158 | 0.9193 |
+| Test R2 | 0.9250 | 0.9315 |
+| MAE | $11,296 | $11,004 |
+| RMSE | $16,011 | $15,727 |
+
+Alpha=10 applies enough regularization to shrink noisy and redundant coefficients without underfitting. Going higher than 10 starts compressing coefficients that actually carry signal.
+
+---
+
+## Why Ridge Beat LightGBM Here
+
+LightGBM is usually the stronger model on tabular data. It lost here without tuning because the post-encoding feature space is 167 columns wide, many of which are one-hot encoded dummies that are sparse and correlated. LightGBM's default tree depth and learning rate were not set up for this kind of space. Ridge with L2 regularization handles high-dimensional spaces naturally. It penalizes large coefficients and deals well with collinear features.
+
+This is not a statement that Ridge is better than LightGBM in general. Tuned LightGBM would likely come close or beat Ridge here. But for this dataset and this setup, Ridge is the cleaner and more interpretable choice.
+
+---
 
 ## Feature Importance (Top 5)
 
+Ridge does not have built-in feature importance, so absolute coefficient values were used as a proxy after scaling.
+
 | Feature | Insight |
 |---|---|
-| MS Zoning C (all) | Commercial zoning strongly reduces residential value |
-| Exterior 1st BrkFace | Brick face exterior signals premium construction quality |
-| Overall Qual | Overall material and finish quality is a core price driver |
-| Gr Liv Area | Above ground living area directly scales with price |
-| Neighborhood MeadowV | Location effects are well captured through neighborhood encoding |
+| `MS Zoning_C (all)` | Commercial zoning sharply reduces residential value |
+| `Exterior 1st_BrkFace` | Brick face exterior signals premium construction |
+| `Overall Qual` | Overall material and finish quality is the single strongest price driver |
+| `Gr Liv Area` | Above-ground living area scales directly with price |
+| `Neighborhood_MeadowV` | Location effects are strong and well captured through neighborhood encoding |
 
-## Model Performance
+---
 
-| Model | MAE | RMSE | R2 |
-|---|---|---|---|
-| Ridge Baseline | $11,296 | $16,011 | 0.9250 |
-| LightGBM Baseline | $11,917 | $16,899 | 0.9184 |
-| Ridge Tuned (alpha=10) | $11,004 | $15,727 | 0.9315 |
+## Saved Files
 
-R2 of 0.9315 means the model explains 93.15% of the variance in house prices. On average, predictions are within $11,004 of the actual sale price.
+| File | Description |
+|---|---|
+| `models/ridge_ames.pkl` | Trained Ridge model (alpha=10) |
+| `models/ames_preprocessor.pkl` | Fitted ColumnTransformer (OHE + StandardScaler) |
+| `models/ames_columns.pkl` | Ordered feature columns expected by the model |
+| `notebook/notebook.ipynb` | Full notebook with code and outputs |
 
-## Tech Stack
+---
 
-- Python 3.x
-- pandas, numpy
-- scikit-learn
-- LightGBM
-- seaborn, matplotlib
-- joblib
+## Requirements
+
+```
+pandas
+numpy
+scikit-learn
+lightgbm
+matplotlib
+seaborn
+joblib
+```
+
+```bash
+pip install pandas numpy scikit-learn lightgbm matplotlib seaborn joblib
+```
+
+---
 
 ## How to Run
 
+1. Clone the repo:
 ```bash
 git clone https://github.com/ammartech-sol/ames-housing-regression
 cd ames-housing-regression
+```
+
+2. Install dependencies:
+```bash
 pip install -r requirements.txt
+```
+
+3. The dataset is already in the `data/` folder. Open and run the notebook from top to bottom:
+```bash
 jupyter notebook notebook/notebook.ipynb
 ```
 
-The dataset is already included in the data folder.
+---
+
+## Key Takeaways
+
+- R2 is computed on log-scale predictions but MAE and RMSE should always be reported in actual dollar values after reversing the transformation. Mixing the two makes error metrics uninterpretable
+- Ordinal encoding without defining explicit category order is worse than no encoding at all. The model would learn that `Ex` and `Po` are just arbitrary numbers with no relationship to each other
+- LightGBM overfitting on the baseline is not a reason to rule it out. It is a reason to tune it before drawing conclusions
+- Ridge handles high-dimensional sparse feature spaces well because L2 regularization naturally shrinks correlated and redundant coefficients
+- Capping outliers at the 99th percentile is a practical choice for linear models; for tree-based models it would not matter and could safely be skipped
+- The dataset creator's own documentation flagged the large `Gr Liv Area` outliers. Reading the dataset documentation before touching the data is worth the 10 minutes
